@@ -34,6 +34,7 @@ enum dmx_source {
 #define DMX_SET_SOURCE _IOW('o', 49, enum dmx_source)
 #endif
 
+
 //#define SHOW_WRITE_TIME
 static int determineBufferCount()
 {

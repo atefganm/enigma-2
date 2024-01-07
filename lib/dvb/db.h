@@ -18,6 +18,7 @@ class eDVBDB: public iDVBChannelList
 	friend class eDVBDBBouquetQuery;
 	friend class eDVBDBSatellitesQuery;
 	friend class eDVBDBProvidersQuery;
+	friend class eRTSPStreamClient;
 
 	struct channel
 	{
@@ -88,6 +89,7 @@ public:
 	void saveServicelist();
 	void saveServicelist(const char *file);
 	void reloadBouquets();
+	bool isValidService(int tsid, int onid, int sid);
 	void parseServiceData(ePtr<eDVBService> s, std::string str);
 };
 
