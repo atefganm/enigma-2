@@ -40,6 +40,7 @@
 					<item level="0" entryID="av_setup"><setup id="avsetup"/></item>
 					<item level="2" entryID="subtitle_setup"><setup id="subtitlesetup"/></item>
 					<item level="0" entryID="autolanguage_setup"><setup id="autolanguagesetup"/></item>
+					<item key="osdsetup" level="1" text="OSD Position Settings" weight="50" requires="CanChangeOsdPosition"><screen module="UserInterfacePositioner" screen="UserInterfacePositioner2" /></item>
 				</menu>
 				<item level="0" entryID="usage_setup"><setup id="usage"/></item>
 				<menu level="0" text="GUI Settings" entryID="gui_settings">
@@ -59,6 +60,7 @@
 				<id val="expert"/>
 				<item level="0" entryID="accesslevel_setup"><setup id="accesslevel"/></item>
 				<item level="0" entryID="recording_setup"><setup id="recording"/></item>
+				<item entryID="hdmirecord_setup" level="0" text="HDMI-IN Recording settings" weight="15" requires="HDMIin"><setup id="HDMIRecord"/></item>
 
 					<menu level="0" text="Harddisk" entryID="hardisk_selection" requires="Harddisk">
 					<id val="harddisk"/>
@@ -97,5 +99,6 @@
 			<item text="Multiboot image selector" entryID="multiboot" requires="canMultiBoot"><screen module="FlashImage" screen="MultibootSelection">1</screen></item>
 			<item text="Deep standby" requires="DeepstandbySupport" entryID="deep_standby"><screen module="Standby" screen="TryQuitMainloop">1</screen></item>
 			<item text="Shutdown" requires="!DeepstandbySupport" entryID="deep_standby"><screen module="Standby" screen="TryQuitMainloop">1</screen></item>
+			<item entryID="maintenance_mode" level="0" text="Recovery Mode" weight="55" requires="RecoveryMode"><screen module="Standby" screen="TryQuitMainloop">16</screen></item>
 		</menu>
 </menu>
