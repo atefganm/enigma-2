@@ -555,6 +555,10 @@ profile("AVSwitch")
 import Components.AVSwitch
 Components.AVSwitch.InitAVSwitch()
 
+profile("HdmiRecord")
+import Components.HdmiRecord
+Components.HdmiRecord.InitHdmiRecord()
+
 profile("RecordingConfig")
 import Components.RecordingConfig
 Components.RecordingConfig.InitRecordingConfig()
@@ -580,6 +584,19 @@ profile("LCD")
 import Components.Lcd
 Components.Lcd.InitLcd()
 
+from Tools.HardwareInfo import HardwareInfo
+if HardwareInfo().get_device_model() in ('dm7080', 'dm820', 'dm900', 'dm920', 'dreamone', 'dreamtwo'):
+	print("[StartEnigma] Read /proc/stb/hdmi-rx/0/hdmi_rx_monitor")
+	check = open("/proc/stb/hdmi-rx/0/hdmi_rx_monitor", "r").read()
+	if check.startswith("on"):
+		print("[StartEnigma] Write to /proc/stb/hdmi-rx/0/hdmi_rx_monitor")
+		open("/proc/stb/hdmi-rx/0/hdmi_rx_monitor", "w").write("off")
+	print("[StartEnigma] Read /proc/stb/audio/hdmi_rx_monitor")
+	checkaudio = open("/proc/stb/audio/hdmi_rx_monitor", "r").read()
+	if checkaudio.startswith("on"):
+		print("[StartEnigma] Write to /proc/stb/audio/hdmi_rx_monitor")
+		open("/proc/stb/audio/hdmi_rx_monitor", "w").write("off")
+
 profile("RFMod")
 import Components.RFmod
 Components.RFmod.InitRFmod()
@@ -590,6 +607,10 @@ Screens.Ci.InitCiConfig()
 
 profile("RcModel")
 import Components.RcModel
+
+profile("UserInterface")
+import Screens.UserInterfacePositioner
+Screens.UserInterfacePositioner.InitOsd()
 
 profile("Init:PowerOffTimer")
 from Components.PowerOffTimer import powerOffTimer

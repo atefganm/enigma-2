@@ -37,13 +37,15 @@ from Screens.UnhandledKey import UnhandledKey
 from ServiceReference import ServiceReference, isPlayableForCur
 
 from Tools.ASCIItranslit import legacyEncode
-from Tools.Directories import fileExists, getRecordingFilename, moveFiles
+from Tools.Directories import fileExists, getRecordingFilename, moveFiles, fileWriteLine
 from Tools.Notifications import AddPopup, AddNotificationWithCallback, current_notifications, lock, notificationAdded, notifications, RemovePopup
+from Tools.HardwareInfo import HardwareInfo
 
-from enigma import eTimer, eServiceCenter, eDVBServicePMTHandler, iServiceInformation, iPlayableService, eServiceReference, eEPGCache, eActionMap, getDesktop, eDVBDB
+from enigma import eTimer, eServiceCenter, eDVBServicePMTHandler, iServiceInformation, iPlayableService, eServiceReference, eEPGCache, eActionMap, getDesktop, eDVBDB, getBoxType
 
 from time import time, localtime, strftime
 import os
+from os.path import isfile
 from bisect import insort
 from sys import maxsize
 import itertools
@@ -51,6 +53,8 @@ import datetime
 from re import match
 
 from RecordTimer import RecordTimerEntry, RecordTimer, findSafeRecordPath
+
+boxtype = getBoxType()
 
 # hack alert!
 from Screens.Menu import MainMenu, mdom
@@ -138,20 +142,22 @@ class whitelist:
 	vbi = []
 
 def reload_whitelist_vbi():
-	whitelist.vbi = [line.strip() for line in open('/etc/enigma2/whitelist_vbi', 'r').readlines()] if os.path.isfile('/etc/enigma2/whitelist_vbi') else []
+	whitelist.vbi = [line.strip() for line in open('/etc/enigma2/whitelist_vbi', 'r').readlines()] if isfile('/etc/enigma2/whitelist_vbi') else []
 
 
 reload_whitelist_vbi()
 
 class InfoBarStreamRelay:
-
+ 
 	FILENAME = "/etc/enigma2/whitelist_streamrelay"
+
 
 	def __init__(self):
 		self.__srefs = self.__sanitizeData(open(self.FILENAME, 'r').readlines()) if os.path.isfile(self.FILENAME) else []
 
 	def __sanitizeData(self, data):
 		return list(set([line.strip() for line in data if line and isinstance(line, str) and match("^(?:[0-9A-F]+[:]){10}$", line.strip())])) if isinstance(data, list) else []
+
 
 	def __saveToFile(self):
 		self.__srefs.sort(key=lambda ref: (int((x := ref.split(":"))[6], 16), int(x[5], 16), int(x[4], 16), int(x[3], 16)))
@@ -169,6 +175,7 @@ class InfoBarStreamRelay:
 
 	def getData(self):
 		return self.__srefs
+
 
 	def setData(self, data):
 		self.__srefs = self.__sanitizeData(data)
@@ -203,7 +210,7 @@ def reload_subservice_groupslist(force=False):
 	if subservice.groupslist is None or force:
 		try:
 			groupedservices = "/etc/enigma2/groupedservices"
-			if not os.path.isfile(groupedservices):
+			if not isfile(groupedservices):
 				groupedservices = "/usr/share/enigma2/groupedservices"
 			subservice.groupslist = [list(g) for k, g in itertools.groupby([line.split('#')[0].strip() for line in open(groupedservices).readlines()], lambda x:not x) if not k]
 		except:
@@ -328,6 +335,12 @@ class InfoBarShowHide(InfoBarScreenSaver):
 		self.__state = self.STATE_SHOWN
 		self.__locked = 0
 
+		if config.usage.fadeout.value is True:
+			self.DimmingTimer = eTimer()
+			self.DimmingTimer.callback.append(self.doDimming)
+			self.unDimmingTimer = eTimer()
+			self.unDimmingTimer.callback.append(self.unDimming)
+
 		self.hideTimer = eTimer()
 		self.hideTimer.callback.append(self.doTimerHide)
 		self.hideTimer.start(5000, True)
@@ -352,6 +365,9 @@ class InfoBarShowHide(InfoBarScreenSaver):
 		self.hideVBILineScreen = self.session.instantiateDialog(HideVBILine)
 		self.hideVBILineScreen.show()
 
+		if config.usage.fadeout.value is True:
+			self.lastResetAlpha = True
+
 		self.onLayoutFinish.append(self.__layoutFinished)
 		self.onExecBegin.append(self.__onExecBegin)
 
@@ -372,10 +388,37 @@ class InfoBarShowHide(InfoBarScreenSaver):
 
 	def __onHide(self):
 		self.__state = self.STATE_HIDDEN
+		if config.usage.fadeout.value is True:
+			self.resetAlpha()
 		if self.actualSecondInfoBarScreen:
 			self.actualSecondInfoBarScreen.hide()
 		for x in self.onShowHideNotifiers:
 			x(False)
+
+	def resetAlpha(self):
+		if config.usage.show_infobar_do_dimming.value and self.lastResetAlpha is False:
+			self.unDimmingTimer.start(300, True)
+
+	def doDimming(self):
+		if config.usage.show_infobar_do_dimming.value:
+			self.dimmed = int(int(self.dimmed) - 1)
+		else:
+			self.dimmed = 0
+		self.DimmingTimer.stop()
+		self.doHide()
+
+	def unDimming(self):
+		self.unDimmingTimer.stop()
+		self.doWriteAlpha(config.av.osd_alpha.value)
+
+	def doWriteAlpha(self, value):
+		if SystemInfo["CanChangeOsdAlpha"]:
+#			print("[InfoBarGenerics] Write to /proc/stb/video/alpha")
+			open("/proc/stb/video/alpha", "w").write(str(value))
+			if value == config.av.osd_alpha.value:
+				self.lastResetAlpha = True
+			else:
+				self.lastResetAlpha = False
 
 	def toggleShowLong(self):
 		if not config.usage.ok_is_channelselection.value:
@@ -434,12 +477,29 @@ class InfoBarShowHide(InfoBarScreenSaver):
 
 	def doShow(self):
 		self.show()
+		if config.usage.fadeout.value is True:
+			self.hideTimer.stop()
+			self.DimmingTimer.stop()
+			self.doWriteAlpha(config.av.osd_alpha.value)
 		self.startHideTimer()
 
 	def doTimerHide(self):
 		self.hideTimer.stop()
-		if self.__state == self.STATE_SHOWN:
-			self.hide()
+		if config.usage.fadeout.value is True:
+			self.DimmingTimer.start(70, True)
+			self.dimmed = config.usage.show_infobar_dimming_speed.value
+		else:
+			if self.__state == self.STATE_SHOWN:
+				self.hide()
+
+	def doHide(self):
+		if self.__state != self.STATE_HIDDEN:
+			if self.dimmed > 0:
+				self.doWriteAlpha(int(int(config.av.osd_alpha.value) * int(self.dimmed) / int(config.usage.show_infobar_dimming_speed.value)))
+				self.DimmingTimer.start(5, True)
+			else:
+				self.DimmingTimer.stop()
+				self.hide()
 
 	def okButtonCheck(self):
 		if config.usage.ok_is_channelselection.value and hasattr(self, "openServiceList"):
@@ -482,7 +542,17 @@ class InfoBarShowHide(InfoBarScreenSaver):
 			self.hideTimer.stop()
 
 	def unlockShow(self):
-		self.__locked -= 1
+		if config.usage.fadeout.value is True:
+			if config.usage.show_infobar_do_dimming.value and self.lastResetAlpha is False:
+				self.doWriteAlpha(config.av.osd_alpha.value)
+			try:
+				self.__locked -= 1
+			except:
+				self.__locked = 0
+			if self.__locked < 0:
+				self.__locked = 0
+		else:
+			self.__locked -= 1
 		if self.execing:
 			self.startHideTimer()
 
@@ -1823,6 +1893,12 @@ class InfoBarPVRState:
 	def _mayShow(self):
 		if self.shown:
 			self.pvrStateDialog.show()
+		if config.usage.fadeout.value is True:
+			if self.shown and self.seekstate != self.SEEK_STATE_EOF:
+				self.DimmingTimer.stop()
+				self.doWriteAlpha(config.av.osd_alpha.value)
+				self.pvrStateDialog.show()
+				self.startHideTimer()
 
 	def __playStateChanged(self, state):
 		playstateString = state[3]
@@ -3075,6 +3151,151 @@ class InfoBarRedButton:
 			for x in self.onRedButtonActivation:
 				x()
 
+class InfoBarAspectSelection:
+	STATE_HIDDEN = 0
+	STATE_ASPECT = 1
+	STATE_RESOLUTION = 2
+
+	def __init__(self):
+		self["AspectSelectionAction"] = HelpableActionMap(self, ["InfobarAspectSelectionActions"], {
+			"aspectSelection": (self.ExGreen_toggleGreen, _("Aspect ratio list")),
+		}, prio=0, description=_("Aspect Ratio Actions"))
+
+		self.__ExGreen_state = self.STATE_HIDDEN
+
+	def ExGreen_doAspect(self):
+		print("do self.STATE_ASPECT")
+		self.__ExGreen_state = self.STATE_ASPECT
+		self.aspectSelection()
+
+	def ExGreen_doResolution(self):
+		print("do self.STATE_RESOLUTION")
+		self.__ExGreen_state = self.STATE_RESOLUTION
+		self.resolutionSelection()
+
+	def ExGreen_doHide(self):
+		print("do self.STATE_HIDDEN")
+		self.__ExGreen_state = self.STATE_HIDDEN
+
+	def ExGreen_toggleGreen(self, arg=""):
+		print(self.__ExGreen_state)
+		if self.__ExGreen_state == self.STATE_HIDDEN:
+			print("self.STATE_HIDDEN")
+			self.ExGreen_doAspect()
+		elif self.__ExGreen_state == self.STATE_ASPECT:
+			print("self.STATE_ASPECT")
+			self.ExGreen_doResolution()
+		elif self.__ExGreen_state == self.STATE_RESOLUTION:
+			print("self.STATE_RESOLUTION")
+			self.ExGreen_doHide()
+
+	def aspectSelection(self):
+		selection = 0
+		tlist = [(_("Resolution"), "resolution"), ("--", ""), (_("4:3 letterbox"), "0"), (_("4:3 panscan"), "1"), (_("16:9"), "2"), (_("16:9 always"), "3"), (_("16:10 letterbox"), "4"), (_("16:10 panscan"), "5"), (_("16:9 letterbox"), "6")]
+		for x in range(len(tlist)):
+			selection = x
+		keys = ["green", "", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+		self.session.openWithCallback(self.aspectSelected, ChoiceBox, title=_("Please select an aspect ratio..."), list=tlist, selection=selection, keys=keys)
+
+	def aspectSelected(self, aspect):
+		if not aspect is None:
+			if isinstance(aspect[1], str):
+				if aspect[1] == "":
+					self.ExGreen_doHide()
+				elif aspect[1] == "resolution":
+					self.ExGreen_toggleGreen()
+				else:
+					from Components.AVSwitch import AVSwitch
+					iAVSwitch = AVSwitch()
+					iAVSwitch.setAspectRatio(int(aspect[1]))
+					self.ExGreen_doHide()
+		else:
+			self.ExGreen_doHide()
+		return
+
+class InfoBarResolutionSelection:
+	def __init__(self):
+		return
+
+	def resolutionSelection(self):
+		if isfile("/proc/stb/vmpeg/0/xres"):
+			xRes = int(fileReadLine("/proc/stb/vmpeg/0/xres", 0, source=MODULE_NAME), 16)
+		elif isfile("/sys/class/video/frame_width"):
+			xRes = int(fileReadLine("/sys/class/video/frame_width", 0, source=MODULE_NAME))
+		if isfile("/proc/stb/vmpeg/0/yres"):
+			yRes = int(fileReadLine("/proc/stb/vmpeg/0/yres", 0, source=MODULE_NAME), 16)
+		elif isfile("/sys/class/video/frame_height"):
+			yRes = int(fileReadLine("/sys/class/video/frame_height", 0, source=MODULE_NAME))
+		if brand == "azbox":
+			print("[InfoBarGenerics] Set fpsString to 50000 for azbox to avoid further problems!")
+			fpsString = '50000'
+		else:
+			if isfile("/proc/stb/vmpeg/0/framerate"):
+				fps = float(fileReadLine("/proc/stb/vmpeg/0/framerate", 50000, source=MODULE_NAME)) / 1000.0
+			elif isfile("/proc/stb/vmpeg/0/frame_rate"):
+				fps = float(fileReadLine("/proc/stb/vmpeg/0/frame_rate", 50000, source=MODULE_NAME)) / 1000.0
+		xres = int(xresString, 16)
+		yres = int(yresString, 16)
+		fps = int(fpsString)
+		fpsFloat = float(fps)
+		fpsFloat = fpsFloat / 1000
+
+		# do we need a new sorting with this way here or should we disable some choices?
+		choices = []
+		if os.path.exists("/proc/stb/video/videomode_choices"):
+			print("[InfoBarGenerics] Read /proc/stb/video/videomode_choices")
+			f = open("/proc/stb/video/videomode_choices")
+			values = f.readline().replace("\n", "").replace("pal ", "").replace("ntsc ", "").split(" ", -1)
+			for x in values:
+				entry = x.replace('i50', 'i@50hz').replace('i60', 'i@60hz').replace('p23', 'p@23.976hz').replace('p24', 'p@24hz').replace('p25', 'p@25hz').replace('p29', 'p@29hz').replace('p30', 'p@30hz').replace('p50', 'p@50hz'), x
+				choices.append(entry)
+			f.close()
+
+		selection = 0
+		tlist = []
+		tlist.append((_("Exit"), "exit"))
+		tlist.append((_("Auto (not available)"), "auto"))
+		tlist.append((_("Video: ") + str(xres) + "x" + str(yres) + "@" + str(fpsFloat) + "hz", ""))
+		tlist.append(("--", ""))
+		if choices != []:
+			for x in choices:
+				tlist.append(x)
+
+		keys = ["green", "yellow", "blue", "", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+
+		if isfile("/proc/stb/video/videomode"):
+			mode = fileReadLine("/proc/stb/video/videomode", "Unknown", source=MODULE_NAME)
+		elif isfile("/sys/class/display/mode"):
+			mode = fileReadLine("/sys/class/display/mode", "Unknown", source=MODULE_NAME)
+		print(mode)
+		for x in range(len(tlist)):
+			if tlist[x][1] == mode:
+				selection = x
+
+		self.session.openWithCallback(self.ResolutionSelected, ChoiceBox, title=_("Please select a resolution..."), list=tlist, selection=selection, keys=keys)
+
+	def ResolutionSelected(self, Resolution):
+		if not Resolution is None:
+			if isinstance(Resolution[1], str):
+				if Resolution[1] == "exit" or Resolution[1] == "" or Resolution[1] == "auto":
+					self.ExGreen_toggleGreen()
+				if Resolution[1] != "auto":
+					if isfile("/proc/stb/video/videomode"):
+						if fileWriteLine("/proc/stb/video/videomode", Resolution[1], source=MODULE_NAME):
+							print("[InfoBarGenerics] New video mode is %s." % Resolution[1])
+						else:
+							print("[InfoBarGenerics] Error: Unable to set new video mode of %s!" % videoMode[1])
+					elif isfile("/sys/class/display/mode"):
+						if fileWriteLine("/sys/class/display/mode", Resolution[1], source=MODULE_NAME):
+							print("[InfoBarGenerics] New video mode is %s." % Resolution[1])
+						else:
+							print("[InfoBarGenerics] Error: Unable to set new video mode of %s!" % Resolution[1])
+					#from enigma import gMainDC
+					#gMainDC.getInstance().setResolution(-1, -1)
+					self.ExGreen_doHide()
+		else:
+			self.ExGreen_doHide()
+		return
 
 class InfoBarTimerButton:
 	def __init__(self):
@@ -3767,3 +3988,145 @@ class InfoBarHDMI:
 				self.session.nav.playService(slist.servicelist.getCurrent())
 			else:
 				self.session.nav.playService(self.cur_service)
+
+class InfoBarHdmi2:
+	def __init__(self):
+		self.hdmi_enabled = False
+		self.hdmi_enabled_full = False
+		self.hdmi_enabled_pip = False
+
+		if SystemInfo["HasHDMIin"]:
+			if not self.hdmi_enabled_full:
+				self.addExtension((self.getHDMIInFullScreen, self.HDMIInFull, lambda: True), "blue")
+			if not self.hdmi_enabled_pip:
+				self.addExtension((self.getHDMIInPiPScreen, self.HDMIInPiP, lambda: True), "green")
+		self["HDMIActions"] = HelpableActionMap(self, "InfobarHDMIActions",
+			{
+				"HDMIin": (self.HDMIIn, _("Switch to HDMI in mode")),
+				"HDMIinLong": (self.HDMIInLong, _("Switch to HDMI in mode")),
+			}, prio=2)
+
+	def HDMIInLong(self):
+		if self.LongButtonPressed:
+			if not hasattr(self.session, 'pip') and not self.session.pipshown:
+				self.session.pip = self.session.instantiateDialog(PictureInPicture)
+				self.session.pip.playService(hdmiInServiceRef())
+				self.session.pip.show()
+				self.session.pipshown = True
+				self.session.pip.servicePath = self.servicelist.getCurrentServicePath()
+			else:
+				curref = self.session.pip.getCurrentService()
+				if curref and curref.type != eServiceReference.idServiceHDMIIn:
+					self.session.pip.playService(hdmiInServiceRef())
+					self.session.pip.servicePath = self.servicelist.getCurrentServicePath()
+				else:
+					self.session.pipshown = False
+					del self.session.pip
+
+	def HDMIIn(self):
+		if not self.LongButtonPressed:
+			slist = self.servicelist
+			curref = self.session.nav.getCurrentlyPlayingServiceOrGroup()
+			if curref and curref.type != eServiceReference.idServiceHDMIIn:
+				self.session.nav.playService(hdmiInServiceRef())
+			else:
+				self.session.nav.playService(slist.servicelist.getCurrent())
+
+	def getHDMIInFullScreen(self):
+		if not self.hdmi_enabled_full:
+			return _("Turn on HDMI-IN Full screen mode")
+		else:
+			return _("Turn off HDMI-IN Full screen mode")
+
+	def getHDMIInPiPScreen(self):
+		if not self.hdmi_enabled_pip:
+			return _("Turn on HDMI-IN PiP mode")
+		else:
+			return _("Turn off HDMI-IN PiP mode")
+
+	def HDMIInPiP(self):
+		if HardwareInfo().get_device_model() in ('dm7080', 'dm820', 'dm900', 'dm920'):
+			print("[InfoBarGenerics] Read /proc/stb/hdmi-rx/0/hdmi_rx_monitor")
+			check = open("/proc/stb/hdmi-rx/0/hdmi_rx_monitor", "r").read()
+			if check.startswith("off"):
+				print("[InfoBarGenerics] Write to /proc/stb/audio/hdmi_rx_monitor")
+				open("/proc/stb/audio/hdmi_rx_monitor", "w").write("on")
+				print("[InfoBarGenerics] Write to /proc/stb/hdmi-rx/0/hdmi_rx_monitor")
+				open("/proc/stb/hdmi-rx/0/hdmi_rx_monitor", "w").write("on")
+			else:
+				print("[InfoBarGenerics] Write to /proc/stb/audio/hdmi_rx_monitor")
+				open("/proc/stb/audio/hdmi_rx_monitor", "w").write("off")
+				print("[InfoBarGenerics] Write to /proc/stb/hdmi-rx/0/hdmi_rx_monitor")
+				open("/proc/stb/hdmi-rx/0/hdmi_rx_monitor", "w").write("off")
+		else:
+			if not hasattr(self.session, 'pip') and not self.session.pipshown:
+				self.hdmi_enabled_pip = True
+				self.session.pip = self.session.instantiateDialog(PictureInPicture)
+				self.session.pip.playService(hdmiInServiceRef())
+				self.session.pip.show()
+				self.session.pipshown = True
+				self.session.pip.servicePath = self.servicelist.getCurrentServicePath()
+			else:
+				curref = self.session.pip.getCurrentService()
+				if curref and curref.type != eServiceReference.idServiceHDMIIn:
+					self.hdmi_enabled_pip = True
+					self.session.pip.playService(hdmiInServiceRef())
+					self.session.pip.servicePath = self.servicelist.getCurrentServicePath()
+				else:
+					self.hdmi_enabled_pip = False
+					self.session.pipshown = False
+					del self.session.pip
+
+	def HDMIInFull(self):
+		if HardwareInfo().get_device_model() in ('dm7080', 'dm820', 'dm900', 'dm920', 'one', 'two'):
+			print("[InfoBarGenerics] Read /proc/stb/hdmi-rx/0/hdmi_rx_monitor")
+			check = open("/proc/stb/hdmi-rx/0/hdmi_rx_monitor", "r").read()
+			if check.startswith("off"):
+				if isfile("/proc/stb/video/videomode"):
+					print("[InfoBarGenerics] Read /proc/stb/video/videomode")
+					self.oldvideomode = open("/proc/stb/video/videomode", "r").read()
+				elif isfile("/sys/class/display/mode"):
+					print("[InfoBarGenerics] Read /sys/class/display/mode")
+					self.oldvideomode = open("/sys/class/display/mode", "r").read()
+				print("[InfoBarGenerics] Read /proc/stb/video/videomode_50hz")
+				self.oldvideomode_50hz = open("/proc/stb/video/videomode_50hz", "r").read()
+				print("[InfoBarGenerics] Read /proc/stb/video/videomode_60hz")
+				self.oldvideomode_60hz = open("/proc/stb/video/videomode_60hz", "r").read()
+				if isfile("/proc/stb/video/videomode"):
+					if platform == "dm4kgen":
+						print("[InfoBarGenerics] Write to /proc/stb/video/videomode")
+						open("/proc/stb/video/videomode", "w").write("1080p")
+					else:
+						print("[InfoBarGenerics] Write to /proc/stb/video/videomode")
+						open("/proc/stb/video/videomode", "w").write("720p")
+				elif isfile("/sys/class/display/mode"):
+					print("[InfoBarGenerics] Write to /sys/class/display/mode")
+					open("/sys/class/display/mode", "w").write("1080p")
+				print("[InfoBarGenerics] Write to /proc/stb/audio/hdmi_rx_monitor")
+				open("/proc/stb/audio/hdmi_rx_monitor", "w").write("on")
+				print("[InfoBarGenerics] Write to /proc/stb/hdmi-rx/0/hdmi_rx_monitor")
+				open("/proc/stb/hdmi-rx/0/hdmi_rx_monitor", "w").write("on")
+			else:
+				print("[InfoBarGenerics] Write to /proc/stb/audio/hdmi_rx_monitor")
+				open("/proc/stb/audio/hdmi_rx_monitor", "w").write("off")
+				print("[InfoBarGenerics] Write to /proc/stb/hdmi-rx/0/hdmi_rx_monitor")
+				open("/proc/stb/hdmi-rx/0/hdmi_rx_monitor", "w").write("off")
+				if isfile("/proc/stb/video/videomode"):
+					print("[InfoBarGenerics] Write to /proc/stb/video/videomode")
+					open("/proc/stb/video/videomode", "w").write(self.oldvideomode)
+				elif isfile("/sys/class/display/mode"):
+					print("[InfoBarGenerics] Write to /sys/class/display/mode")
+					open("/sys/class/display/mode", "w").write(self.oldvideomode)
+				print("[InfoBarGenerics] Write to /proc/stb/video/videomode_50hz")
+				open("/proc/stb/video/videomode_50hz", "w").write(self.oldvideomode_50hz)
+				print("[InfoBarGenerics] Write to /proc/stb/video/videomode_60hz")
+				open("/proc/stb/video/videomode_60hz", "w").write(self.oldvideomode_60hz)
+		else:
+			slist = self.servicelist
+			curref = self.session.nav.getCurrentlyPlayingServiceOrGroup()
+			if curref and curref.type != eServiceReference.idServiceHDMIIn:
+				self.hdmi_enabled_full = True
+				self.session.nav.playService(hdmiInServiceRef())
+			else:
+				self.hdmi_enabled_full = False
+				self.session.nav.playService(slist.servicelist.getCurrent())
