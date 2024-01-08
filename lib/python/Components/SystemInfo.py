@@ -1,6 +1,7 @@
 from os import R_OK, access, listdir, walk
 from os.path import exists as fileAccess, isdir, isfile, join as pathjoin
 from re import findall
+import re
 from subprocess import PIPE, Popen
 from hashlib import md5
 from ast import literal_eval
