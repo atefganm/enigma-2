@@ -1,5 +1,5 @@
 import os
-from Components.SystemInfo import BoxInfo
+from Tools.HardwareInfo import HardwareInfo
 from Tools.Directories import SCOPE_SKIN, resolveFilename
 
 
@@ -7,17 +7,13 @@ class RcModel:
 	RcModels = {}
 
 	def __init__(self):
-		self.model = BoxInfo.getItem("machine")
+		self.model = HardwareInfo().get_device_model()
 		# cfg files has modelname  rcname entries.
 		# modelname is boxname optionally followed by .rctype
 		for line in open((resolveFilename(SCOPE_SKIN, 'rc_models/rc_models.cfg')), 'r'):
 			if line.startswith(self.model):
 				m, r = line.strip().split()
 				self.RcModels[m] = r
-
-	def rcIsDefault(self):
-		# Default RC can only happen with DMM type remote controls...
-		return self.model.startswith('dm')
 
 	def getRcFile(self, ext):
 		# check for rc/type every time so rctype changes will be noticed
