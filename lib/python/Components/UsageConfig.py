@@ -1,6 +1,6 @@
 from Components.Harddisk import harddiskmanager
 from Components.Console import Console
-from Components.config import ConfigSubsection, ConfigYesNo, config, ConfigSelection, ConfigText, ConfigNumber, ConfigSet, ConfigLocations, ConfigSelectionNumber, ConfigClock, ConfigSlider, ConfigEnableDisable, ConfigSubDict, ConfigDictionarySet, ConfigInteger, ConfigPassword, ConfigIP
+from Components.config import ConfigSubsection, ConfigYesNo, config, ConfigSelection, ConfigText, ConfigNumber, ConfigSet, ConfigLocations, ConfigSelectionNumber, ConfigClock, ConfigSlider, ConfigEnableDisable, ConfigSubDict, ConfigDictionarySet, ConfigInteger, ConfigPassword, ConfigIP, NoSave
 from Tools.Directories import defaultRecordingLocation
 from enigma import setTunerTypePriorityOrder, setPreferredTuner, setSpinnerOnOff, setEnableTtCachingOnOff, eEnv, eDVBDB, Misc_Options, eBackgroundFileEraser, eServiceEvent, eDVBLocalTimeHandler, eEPGCache
 from Components.About import GetIPsFromNetworkInterfaces
@@ -8,6 +8,7 @@ from Components.NimManager import nimmanager
 from Components.Renderer.FrontpanelLed import ledPatterns, PATTERN_ON, PATTERN_OFF, PATTERN_BLINK
 from Components.ServiceList import refreshServiceList, redrawServiceList
 from Components.SystemInfo import SystemInfo
+from os.path import exists, islink, join as pathjoin, normpath
 import os
 import time
 
@@ -81,6 +82,9 @@ def InitUsageConfig():
 	for i in range(1, 12):
 		choicelist.append((str(i), ngettext("%d second", "%d seconds", i) % i))
 	config.usage.infobar_timeout = ConfigSelection(default="5", choices=choicelist)
+	config.usage.fadeout = ConfigYesNo(default=True)
+	config.usage.show_infobar_do_dimming = ConfigYesNo(default=False)
+	config.usage.show_infobar_dimming_speed = ConfigSelectionNumber(min=1, max=40, stepwidth=1, default=40, wraparound=True)
 	config.usage.show_infobar_on_zap = ConfigYesNo(default=True)
 	config.usage.show_infobar_on_skip = ConfigYesNo(default=True)
 	config.usage.show_infobar_on_event_change = ConfigYesNo(default=False)
@@ -314,6 +318,11 @@ def InitUsageConfig():
 
 	config.usage.swap_snr_on_osd = ConfigYesNo(default=False)
 
+	config.usage.frontled_color = ConfigSelection(default = "2", choices = [("0", _("Off")), ("1", _("Blue")), ("2", _("Red")), ("3", _("Blinking blue")), ("4", _("Blinking red"))])
+	config.usage.frontledrec_color = ConfigSelection(default = "3", choices = [("0", _("Off")), ("1", _("Blue")), ("2", _("Red")), ("3", _("Blinking blue")), ("4", _("Blinking red"))])
+	config.usage.frontledstdby_color = ConfigSelection(default = "0", choices = [("0", _("Off")), ("1", _("Blue")), ("2", _("Red")), ("3", _("Blinking blue")), ("4", _("Blinking red"))])
+	config.usage.frontledrecstdby_color = ConfigSelection(default = "3", choices = [("0", _("Off")), ("1", _("Blue")), ("2", _("Red")), ("3", _("Blinking blue")), ("4", _("Blinking red"))])
+
 	def SpinnerOnOffChanged(configElement):
 		setSpinnerOnOff(int(configElement.value))
 	config.usage.show_spinner.addNotifier(SpinnerOnOffChanged)
@@ -430,6 +439,8 @@ def InitUsageConfig():
 	config.usage.boolean_graphic = ConfigSelection(default="true", choices={"false": _("no"), "true": _("yes"), "only_bool": _("yes, but not in multi selections")})
 
 	config.usage.multiboot_order = ConfigYesNo(default=True)
+
+	config.osd.alpha_teletext = ConfigSelectionNumber(default=255, stepwidth=1, min=0, max=255, wraparound=False)
 
 	config.epg = ConfigSubsection()
 	config.epg.eit = ConfigYesNo(default=True)
@@ -578,6 +589,12 @@ def InitUsageConfig():
 		config.misc.zapmode = ConfigSelection(default="mute", choices=[
 			("mute", _("Black screen")), ("hold", _("Hold screen")), ("mutetilllock", _("Black screen till locked")), ("holdtilllock", _("Hold till locked"))])
 		config.misc.zapmode.addNotifier(setZapmode, immediate_feedback=False)
+
+	if not SystemInfo["ZapMode"] and exists("/proc/stb/info/model"):
+		def setZapmodeDM(el):
+			print('[UsageConfig] >>> zapmodeDM')
+		config.misc.zapmodeDM = ConfigSelection(default="black", choices=[("black", _("Black screen")), ("hold", _("Hold screen"))])
+		config.misc.zapmodeDM.addNotifier(setZapmodeDM, immediate_feedback = False)
 
 	if SystemInfo["VFD_scroll_repeats"]:
 		def scroll_repeats(el):
